@@ -1,0 +1,268 @@
+{
+  "components": {
+    "comp-prepare-batch-data": {
+      "executorLabel": "exec-prepare-batch-data",
+      "inputDefinitions": {
+        "parameters": {
+          "gcs_batch_path": {
+            "parameterType": "STRING"
+          },
+          "gcs_input_path": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-process-results": {
+      "executorLabel": "exec-process-results",
+      "inputDefinitions": {
+        "parameters": {
+          "bq_destination": {
+            "parameterType": "STRING"
+          },
+          "gcs_input_path": {
+            "parameterType": "STRING"
+          },
+          "gcs_output_path": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-run-batch-prediction": {
+      "executorLabel": "exec-run-batch-prediction",
+      "inputDefinitions": {
+        "parameters": {
+          "gcs_batch_path": {
+            "parameterType": "STRING"
+          },
+          "gcs_output_path": {
+            "parameterType": "STRING"
+          },
+          "location": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-prepare-batch-data": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "prepare_batch_data"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform>=1.71.1' 'vertexai>=0.0.1' 'pandas>=2.0.0' 'google-cloud-bigquery>=3.0.0' 'google-cloud-storage>=2.0.0' 'protobuf<5.0.0' 'urllib3<2.0.0' 'kfp>=2.0.0' 'kfp-pipeline-spec==0.6.0' 'kfp-server-api>=2.1.0,<2.4.0' 'kubernetes>=8.0.0,<31.0.0' 'PyYAML>=5.3,<7.0' 'requests-toolbelt>=0.8.0,<1.0.0' 'tabulate>=0.8.6,<1.0.0' 'pyarrow' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef prepare_batch_data(\n    project_id: str, gcs_input_path: str, gcs_batch_path: str\n) -> str:\n    \"\"\"Prepare data for batch prediction\"\"\"\n    from google.cloud import storage\n    import pandas as pd\n    import json\n    import logging\n    import sys\n    from io import StringIO\n\n    logging.basicConfig(level=logging.DEBUG)\n    logger = logging.getLogger(__name__)\n\n    try:\n        logger.info(f\"Starting data preparation\")\n\n        # Read input CSV\n        storage_client = storage.Client(project=project_id)\n        input_bucket = storage_client.bucket(gcs_input_path.split(\"/\")[2])\n        input_blob = input_bucket.blob(\"/\".join(gcs_input_path.split(\"/\")[3:]))\n\n        df = pd.read_csv(StringIO(input_blob.download_as_text()))\n        logger.info(f\"Read {len(df)} rows from CSV\")\n\n        # Prepare JSONL for Gemini\n        batch_instances = []\n        prompt_template = \"\"\"Classify this support ticket into one of these categories:\n- Technical Issue\n- Billing Inquiry\n- Product Inquiry\n- Cancellation Request\n- Refund Request\n\nTicket:\n{ticket_text}\n\nRespond with only the category name and confidence score (0-1) separated by a comma.\nExample: Technical Issue,0.95\"\"\"\n\n        for idx, row in df.iterrows():\n            if idx % 100 == 0:\n                logger.info(f\"Processing row {idx}\")\n\n            ticket_text = f\"Subject: {row['Ticket Subject']}\\nDescription: {row['Ticket Description']}\"\n\n            # Format matching the example JSONL structure\n            instance = {\n                \"request\": {\n                    \"contents\": [\n                        {\n                            \"role\": \"user\",\n                            \"parts\": [\n                                {\n                                    \"text\": prompt_template.format(\n                                        ticket_text=ticket_text\n                                    )\n                                }\n                            ],\n                        }\n                    ]\n                }\n            }\n            batch_instances.append(json.dumps(instance))\n\n        # Write JSONL to GCS\n        logger.info(f\"Writing {len(batch_instances)} instances to {gcs_batch_path}\")\n        output_bucket = storage_client.bucket(gcs_batch_path.split(\"/\")[2])\n        output_blob = output_bucket.blob(\"/\".join(gcs_batch_path.split(\"/\")[3:]))\n\n        # Log sample instance for debugging\n        logger.info(f\"Sample JSONL instance:\\n{batch_instances[0]}\")\n\n        output_content = \"\\n\".join(batch_instances)\n        output_blob.upload_from_string(output_content)\n\n        logger.info(\"Successfully wrote JSONL file\")\n        return gcs_batch_path\n\n    except Exception as e:\n        logger.error(\"Error in prepare_batch_data:\", exc_info=True)\n        raise\n\n"
+          ],
+          "image": "python:3.9-slim"
+        }
+      },
+      "exec-process-results": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "process_results"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform>=1.71.1' 'vertexai>=0.0.1' 'pandas>=2.0.0' 'google-cloud-bigquery>=3.0.0' 'google-cloud-storage>=2.0.0' 'protobuf<5.0.0' 'urllib3<2.0.0' 'kfp>=2.0.0' 'kfp-pipeline-spec==0.6.0' 'kfp-server-api>=2.1.0,<2.4.0' 'kubernetes>=8.0.0,<31.0.0' 'PyYAML>=5.3,<7.0' 'requests-toolbelt>=0.8.0,<1.0.0' 'tabulate>=0.8.6,<1.0.0' 'pyarrow' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef process_results(\n    project_id: str, gcs_input_path: str, gcs_output_path: str, bq_destination: str\n):\n    \"\"\"Process batch prediction results and load to BigQuery\"\"\"\n    from google.cloud import storage, bigquery\n    import pandas as pd\n    import json\n    import logging\n    import sys\n    from io import StringIO\n\n    logging.basicConfig(level=logging.DEBUG)\n    logger = logging.getLogger(__name__)\n\n    try:\n        # 1. Initial setup and validation\n        logger.info(\"=== Starting Component Setup ===\")\n        logger.info(f\"Project ID: {project_id}\")\n        logger.info(f\"Input path: {gcs_input_path}\")\n        logger.info(f\"Predictions path: {gcs_output_path}\")\n        logger.info(f\"BigQuery destination: {bq_destination}\")\n\n        # 2. Validate paths\n        logger.info(\"=== Validating GCS paths ===\")\n        if not gcs_input_path.startswith(\"gs://\"):\n            raise ValueError(f\"Invalid input path format: {gcs_input_path}\")\n        if not gcs_output_path.startswith(\"gs://\"):\n            raise ValueError(f\"Invalid output path format: {gcs_output_path}\")\n\n        # 3. Initialize clients\n        logger.info(\"=== Initializing Clients ===\")\n        try:\n            storage_client = storage.Client(project=project_id)\n            logger.info(\"Storage client initialized\")\n        except Exception as e:\n            logger.error(\"Failed to initialize storage client\")\n            raise\n\n        # 4. Check input file with detailed error handling\n        logger.info(\"=== Checking Input File ===\")\n        try:\n            input_bucket_name = gcs_input_path.replace(\"gs://\", \"\").split(\"/\")[0]\n            input_blob_path = \"/\".join(\n                gcs_input_path.replace(\"gs://\", \"\").split(\"/\")[1:]\n            )\n\n            logger.info(f\"Input bucket: {input_bucket_name}\")\n            logger.info(f\"Input blob path: {input_blob_path}\")\n\n            # Check bucket exists\n            input_bucket = storage_client.bucket(input_bucket_name)\n            if not input_bucket.exists():\n                logger.error(f\"Bucket does not exist: {input_bucket_name}\")\n                raise FileNotFoundError(f\"Bucket not found: {input_bucket_name}\")\n            logger.info(\"Bucket exists\")\n\n            # List files in directory to verify access\n            blobs = list(input_bucket.list_blobs(prefix=\"raw/\"))\n            logger.info(f\"Found {len(blobs)} files in raw/ directory\")\n            for blob in blobs:\n                logger.info(f\"Found file: {blob.name}\")\n\n            # Try to get the specific blob\n            input_blob = input_bucket.blob(input_blob_path)\n            try:\n                metadata = input_blob.metadata\n                logger.info(f\"Blob metadata: {metadata}\")\n            except Exception as e:\n                logger.warning(f\"Could not get metadata: {str(e)}\")\n\n            # Check if file exists\n            exists = input_blob.exists()\n            logger.info(f\"Blob exists: {exists}\")\n\n            if not exists:\n                raise FileNotFoundError(f\"Input CSV not found: {gcs_input_path}\")\n\n            # Try to get file stats\n            try:\n                size = input_blob.size\n                updated = input_blob.updated\n                logger.info(f\"File size: {size} bytes\")\n                logger.info(f\"Last updated: {updated}\")\n            except Exception as e:\n                logger.warning(f\"Could not get file stats: {str(e)}\")\n\n            # Try to read first few bytes\n            try:\n                sample = input_blob.download_as_string(start=0, end=100)\n                logger.info(f\"First 100 bytes: {sample}\")\n            except Exception as e:\n                logger.warning(f\"Could not read file sample: {str(e)}\")\n\n            logger.info(\"Input file checks completed\")\n\n        except Exception as e:\n            logger.error(\"Failed to access input file\", exc_info=True)\n            raise\n\n        # 5. Check predictions directory\n        logger.info(\"=== Checking Predictions Directory ===\")\n        pred_bucket_name = gcs_output_path.replace(\"gs://\", \"\").split(\"/\")[0]\n        pred_prefix = \"/\".join(gcs_output_path.replace(\"gs://\", \"\").split(\"/\")[1:])\n\n        logger.info(f\"Predictions bucket: {pred_bucket_name}\")\n        logger.info(f\"Predictions prefix: {pred_prefix}\")\n\n        pred_bucket = storage_client.bucket(pred_bucket_name)\n\n        # Specifically look for predictions.jsonl\n        predictions_path = f\"{pred_prefix}/predictions.jsonl\"\n        predictions_blob = pred_bucket.blob(predictions_path)\n\n        if not predictions_blob.exists():\n            raise FileNotFoundError(f\"Predictions file not found: {predictions_path}\")\n\n        logger.info(f\"Found predictions file: {predictions_path}\")\n        logger.info(f\"File size: {predictions_blob.size} bytes\")\n\n        # Read predictions\n        logger.info(\"Reading predictions file\")\n        predictions = []\n        content = predictions_blob.download_as_text()\n\n        for line_num, line in enumerate(content.splitlines(), 1):\n            try:\n                data = json.loads(line)\n                if data.get(\"response\") and data[\"response\"].get(\"candidates\"):\n                    pred_text = data[\"response\"][\"candidates\"][0][\"content\"][\"parts\"][\n                        0\n                    ][\"text\"]\n                    category, confidence = pred_text.strip().split(\",\")\n                    predictions.append(\n                        {\n                            \"processed_time\": data.get(\"processed_time\"),\n                            \"category\": category.strip(),\n                            \"confidence\": float(confidence),\n                        }\n                    )\n                else:\n                    logger.warning(f\"No prediction in line {line_num}\")\n            except Exception as e:\n                logger.error(f\"Error processing line {line_num}: {str(e)}\")\n                continue\n\n        logger.info(f\"Processed {len(predictions)} predictions\")\n\n        # Create predictions DataFrame\n        pred_df = pd.DataFrame(predictions)\n        logger.info(f\"Predictions shape: {pred_df.shape}\")\n\n        # Read and process input data\n        logger.info(\"Reading input CSV\")\n        input_df = pd.read_csv(StringIO(input_blob.download_as_text()))\n        logger.info(f\"Input shape: {input_df.shape}\")\n\n        # Merge data\n        result_df = pd.concat(\n            [input_df.reset_index(drop=True), pred_df.reset_index(drop=True)], axis=1\n        )\n\n        logger.info(f\"Final dataset shape: {result_df.shape}\")\n\n        # Load to BigQuery\n        logger.info(\"Loading to BigQuery\")\n        client = bigquery.Client(project=project_id)\n\n        job_config = bigquery.LoadJobConfig(write_disposition=\"WRITE_TRUNCATE\")\n\n        job = client.load_table_from_dataframe(\n            result_df, bq_destination, job_config=job_config\n        )\n        job.result()\n\n        logger.info(\"Processing completed successfully\")\n\n    except Exception as e:\n        logger.error(\"Error in process_results:\", exc_info=True)\n        raise\n\n"
+          ],
+          "image": "python:3.9-slim"
+        }
+      },
+      "exec-run-batch-prediction": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "run_batch_prediction"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform>=1.71.1' 'vertexai>=0.0.1' 'pandas>=2.0.0' 'google-cloud-bigquery>=3.0.0' 'google-cloud-storage>=2.0.0' 'protobuf<5.0.0' 'urllib3<2.0.0' 'kfp>=2.0.0' 'kfp-pipeline-spec==0.6.0' 'kfp-server-api>=2.1.0,<2.4.0' 'kubernetes>=8.0.0,<31.0.0' 'PyYAML>=5.3,<7.0' 'requests-toolbelt>=0.8.0,<1.0.0' 'tabulate>=0.8.6,<1.0.0' 'pyarrow' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef run_batch_prediction(\n    project_id: str, location: str, gcs_batch_path: str, gcs_output_path: str\n) -> str:\n    \"\"\"Run batch prediction using Gemini\"\"\"\n    import vertexai\n    from vertexai.batch_prediction import BatchPredictionJob\n    import logging\n    import sys\n    import time\n\n    logging.basicConfig(level=logging.DEBUG)\n    logger = logging.getLogger(__name__)\n\n    try:\n        logger.info(f\"Starting batch prediction with inputs:\")\n        logger.info(f\"Input path: {gcs_batch_path}\")\n        logger.info(f\"Output path: {gcs_output_path}\")\n\n        # Initialize Vertex AI\n        vertexai.init(project=project_id, location=location)\n\n        # Submit batch prediction job\n        batch_prediction_job = BatchPredictionJob.submit(\n            source_model=\"gemini-1.5-flash-002\",\n            input_dataset=gcs_batch_path,\n            output_uri_prefix=gcs_output_path,\n        )\n\n        logger.info(f\"Job resource name: {batch_prediction_job.resource_name}\")\n        logger.info(f\"Model name: {batch_prediction_job.model_name}\")\n        logger.info(f\"Initial state: {batch_prediction_job.state.name}\")\n\n        # Monitor until complete\n        while not batch_prediction_job.has_ended:\n            time.sleep(10)\n            batch_prediction_job.refresh()\n            logger.info(f\"Job state: {batch_prediction_job.state.name}\")\n\n        # Check final status\n        if batch_prediction_job.has_succeeded:\n            logger.info(\"Job succeeded!\")\n            logger.info(f\"Output location: {batch_prediction_job.output_location}\")\n            return batch_prediction_job.output_location\n        else:\n            error_msg = f\"Job failed: {batch_prediction_job.error}\"\n            logger.error(error_msg)\n            raise RuntimeError(error_msg)\n\n    except Exception as e:\n        logger.error(\"Error in batch prediction:\", exc_info=True)\n        raise\n\n"
+          ],
+          "image": "python:3.9-slim"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "Pipeline to classify support tickets using Gemini batch processing",
+    "name": "ticket-classification-pipeline"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "prepare-batch-data": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-prepare-batch-data"
+          },
+          "inputs": {
+            "parameters": {
+              "gcs_batch_path": {
+                "componentInputParameter": "gcs_batch_path"
+              },
+              "gcs_input_path": {
+                "componentInputParameter": "gcs_input_path"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "prepare-batch-data"
+          }
+        },
+        "process-results": {
+          "cachingOptions": {},
+          "componentRef": {
+            "name": "comp-process-results"
+          },
+          "dependentTasks": [
+            "run-batch-prediction"
+          ],
+          "inputs": {
+            "parameters": {
+              "bq_destination": {
+                "componentInputParameter": "bq_destination"
+              },
+              "gcs_input_path": {
+                "componentInputParameter": "gcs_input_path"
+              },
+              "gcs_output_path": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "run-batch-prediction"
+                }
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "process-results"
+          }
+        },
+        "run-batch-prediction": {
+          "cachingOptions": {},
+          "componentRef": {
+            "name": "comp-run-batch-prediction"
+          },
+          "dependentTasks": [
+            "prepare-batch-data"
+          ],
+          "inputs": {
+            "parameters": {
+              "gcs_batch_path": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "prepare-batch-data"
+                }
+              },
+              "gcs_output_path": {
+                "componentInputParameter": "gcs_output_path"
+              },
+              "location": {
+                "componentInputParameter": "location"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "run-batch-prediction"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "bq_destination": {
+          "defaultValue": "kevinle-ticket-classifier.ticket_classification.classified_tickets",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "gcs_batch_path": {
+          "defaultValue": "gs://kevinle-ticket-pipeline/batch/batch_input.jsonl",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "gcs_input_path": {
+          "defaultValue": "gs://kevinle-ticket-pipeline/raw/customer_support_tickets.csv",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "gcs_output_path": {
+          "defaultValue": "gs://kevinle-ticket-pipeline/batch/predictions",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "location": {
+          "defaultValue": "us-central1",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "project_id": {
+          "defaultValue": "kevinle-ticket-classifier",
+          "isOptional": true,
+          "parameterType": "STRING"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.11.0"
+}
