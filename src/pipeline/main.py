@@ -1,6 +1,6 @@
 import os
 from kfp import dsl
-from kfp import compiler
+from kfp.compiler import Compiler
 from dotenv import load_dotenv
 from google.cloud import aiplatform
 
@@ -48,27 +48,18 @@ def ticket_classification_pipeline(
 
 
 def main():
-    """Compile and run the pipeline"""
-    from kfp.compiler import Compiler
-    from google.cloud import aiplatform
-
-    # Compile pipeline
     Compiler().compile(
         pipeline_func=ticket_classification_pipeline, package_path="pipeline.json"
     )
-
-    # Initialize Vertex AI
+    
     aiplatform.init(project="kevinle-ticket-classifier", location="us-central1")
-
-    # Create and run pipeline job
+    
     job = aiplatform.PipelineJob(
         display_name="ticket-classification-batch",
         template_path="pipeline.json",
         pipeline_root="gs://kevinle-ticket-pipeline",
     )
-
     job.run()
-
 
 if __name__ == "__main__":
     main()

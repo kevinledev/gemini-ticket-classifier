@@ -28,7 +28,6 @@ def prepare_batch_data(
     import pandas as pd
     import json
     import logging
-    import sys
     from io import StringIO
 
     logging.basicConfig(level=logging.DEBUG)

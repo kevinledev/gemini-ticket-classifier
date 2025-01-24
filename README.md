@@ -111,3 +111,26 @@ GCS Batch Storage            │             ▼
 4. **Results Processing**
    - Combines original data with predictions
    - Writes final structured data to BigQuery
+
+## Technical Decisions & Considerations
+
+### Why These Choices?
+- **Gemini LLM vs Traditional ML**
+  - No training data needed
+  - Relevant to current industry needs
+
+- **Batch Processing**
+  - Cost-effective for large volumes
+  - Better monitoring and error handling
+  - Periodic processing suits support ticket workflow
+
+### Limitations & Future Work
+- **Current Limitations**
+  - Using ticket subjects could bias classification
+  - No native confidence scores from Gemini
+  - LLM responses may be inconsistent
+
+- **Potential Improvements**
+  - Add monitoring and error alerting
+  - Implement classification accuracy metrics
+  - Consider using only ticket descriptions

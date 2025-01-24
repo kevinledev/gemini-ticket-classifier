@@ -27,7 +27,6 @@ def run_batch_prediction(
     import vertexai
     from vertexai.batch_prediction import BatchPredictionJob
     import logging
-    import sys
     import time
 
     logging.basicConfig(level=logging.DEBUG)

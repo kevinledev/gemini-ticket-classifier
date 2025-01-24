@@ -28,7 +28,6 @@ def process_results(
     import pandas as pd
     import json
     import logging
-    import sys
     from io import StringIO
 
     logging.basicConfig(level=logging.DEBUG)
