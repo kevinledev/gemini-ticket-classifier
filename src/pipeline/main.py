@@ -1,10 +1,14 @@
+import os
 from kfp import dsl
 from kfp import compiler
+from dotenv import load_dotenv
 from google.cloud import aiplatform
 
 from components.prepare_batch_data import prepare_batch_data
 from components.run_batch_prediction import run_batch_prediction
 from components.process_results import process_results
+
+load_dotenv()
 
 
 @dsl.pipeline(
@@ -12,12 +16,12 @@ from components.process_results import process_results
     description="Pipeline to classify support tickets using Gemini batch processing",
 )
 def ticket_classification_pipeline(
-    project_id: str = "kevinle-ticket-classifier",
-    location: str = "us-central1",
-    gcs_input_path: str = "gs://kevinle-ticket-pipeline/raw/customer_support_tickets.csv",
-    gcs_batch_path: str = "gs://kevinle-ticket-pipeline/batch/batch_input.jsonl",
-    gcs_output_path: str = "gs://kevinle-ticket-pipeline/batch/predictions",
-    bq_destination: str = "kevinle-ticket-classifier.ticket_classification.classified_tickets",
+    project_id: str = os.getenv("PROJECT_ID"),
+    location: str = os.getenv("LOCATION"),
+    gcs_input_path: str = os.getenv("GCS_INPUT_PATH"),
+    gcs_batch_path: str = os.getenv("GCS_BATCH_PATH"),
+    gcs_output_path: str = os.getenv("GCS_OUTPUT_PATH"),
+    bq_destination: str = os.getenv("BQ_DESTINATION"),
 ):
     # Prepare data for batch processing
     batch_data = prepare_batch_data(
