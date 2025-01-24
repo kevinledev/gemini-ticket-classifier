@@ -35,14 +35,11 @@ def process_results(
     logger = logging.getLogger(__name__)
 
     try:
-        # 1. Initial setup and validation
         logger.info("=== Starting Component Setup ===")
         logger.info(f"Project ID: {project_id}")
         logger.info(f"Input path: {gcs_input_path}")
         logger.info(f"Predictions path: {gcs_output_path}")
         logger.info(f"BigQuery destination: {bq_destination}")
-
-        # 2. Validate paths
         logger.info("=== Validating GCS paths ===")
         if not gcs_input_path.startswith("gs://"):
             raise ValueError(f"Invalid input path format: {gcs_input_path}")
